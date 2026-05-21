@@ -10,6 +10,7 @@ st.set_page_config(page_title="User Analytics Dashboard", layout="wide")
 
 @st.cache_data
 def load_data():
+    # converting the data to user level (by taking the first date and recent snapshot)
     df = pd.read_csv("analytics_data_may_whole.csv")
     df.columns = [c.strip().lower() for c in df.columns]
     df["period"] = pd.to_datetime(df["period"], errors="coerce")
@@ -39,10 +40,11 @@ with st.sidebar:
         max_value=max_date
     )
 
-    # 2. Demographics & Channels Multiselects
+    # 2. Acquisition channel filter
     all_channels = sorted([c for c in df['acquisition_channel'].dropna().unique()])
     selected_channels = st.multiselect("Acquisition Channel", options=all_channels, default=all_channels)
 
+    # bucketing age groups
     df['age_group'] = pd.cut(
     df['userage'], 
     bins=[0, 18, 25, 35, 45, 55, 120], 
@@ -51,7 +53,7 @@ with st.sidebar:
     all_age_groups = ['<18', '18-25', '26-35', '36-45', '46-55', '55+']
     selected_ages = st.multiselect("User Age Group", options=all_age_groups, default=all_age_groups)
 
-
+    # bucketing user types groups
     df['user_type_groups'] = pd.cut(
     df['user_type'], 
     bins=[-1, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100], 
@@ -60,16 +62,17 @@ with st.sidebar:
     all_user_type_groups = ['0-0.1', '0.1-0.2', '0.2-0.3', '0.3-0.4', '0.4-0.5', '0.5-0.6', '0.6-0.7', '0.7-0.8', '0.8-0.9', '0.9-1.10']
     selected_user_types = st.multiselect("User Type Group", options=all_user_type_groups, default=all_user_type_groups)
 
+    # tier user segments
     all_tiers = sorted([t for t in df['tier'].dropna().unique()])
     selected_tiers = st.multiselect("User Tier", options=all_tiers, default=all_tiers)
 
-    # 3. Account Status Dropdown
+    # 3. Multi account status
     account_options = ["All", "Single Account Only", "Multi Account Only"]
     selected_acc = st.selectbox("Account Status", options=account_options, index=0)
 
 
 # ==========================================
-# FILTER PROCESSING ENGINE
+# FILTER PROCESSING
 # ==========================================
 df = df.copy()
 
@@ -92,7 +95,7 @@ elif selected_acc == "Multi Account Only":
     df = df[df['is_multi_account'] == True]
 
 st.title("New User Spend Behavior & Retention Dashboard")
-# Summary KPI Header Row (Directly below Title)
+# Summary KPI Header Row
 m_col1, m_col2, m_col3 = st.columns(3)
 with m_col1:
     st.info(f"📊 **Filtered Cohort Size:** {len(df):,} users (out of {len(df):,})")
@@ -105,7 +108,7 @@ with m_col3:
 
 st.markdown("---")
 
-# Data Enrichment for visualization purposes
+# Converting dates to month
 df['signup_month'] = df['first_acquired_date'].dt.strftime('%Y-%m')
 # Ensure categorical/boolean types are appropriately typed for Plotly
 df['stayed_active_180d'] = df['stayed_active_180d'].astype(bool)
@@ -113,7 +116,7 @@ df['is_multi_account'] = df['is_multi_account'].astype(bool)
 df['tier'] = df['tier'].astype(str)
 
 # ==========================================
-# 2. TABS SETUP
+# 2. TABS SETUP (have 5 tabs for different analysis)
 # ==========================================
 tabs = st.tabs([
     "1. Acquisition", 
@@ -132,23 +135,19 @@ with tabs[0]:
     
     with c1:
         st.subheader("1. Month wise new users count")
+        #  Month wise new users count
         monthly_users = df.groupby('signup_month').size().reset_index(name='count').dropna()
         st.plotly_chart(px.line(monthly_users, x='signup_month', y='count', markers=True), use_container_width=True,key="key07")
         
-        st.subheader("3. Channels bringing highest-value new users (High value = retained 180 days %)")
-        high_value_counts = df[df['stayed_active_180d'] == True].groupby('acquisition_channel').size().reset_index(name='high_value_users')
-        total_users_counts = df.groupby('acquisition_channel').size().reset_index(name='total_users')
-        high_value = pd.merge(total_users_counts, high_value_counts, on='acquisition_channel', how='left').fillna(0)
-        high_value["high_value_users%"] = (high_value["high_value_users"] / high_value["total_users"]) * 100
-        st.plotly_chart(px.bar(high_value, x='acquisition_channel', y='high_value_users%', color='acquisition_channel', labels={'high_value_users%': 'High Value Users (%)'}), use_container_width=True,key="key06")
-
-        st.subheader("5. Channels producing best retained users (Considering 180 days retention)")
-        retention_by_channel = df.groupby('acquisition_channel')['stayed_active_180d'].mean().reset_index(name='retention_rate')
-        st.plotly_chart(px.bar(retention_by_channel, x='acquisition_channel', y='retention_rate', color='acquisition_channel'), use_container_width=True,key="key05")
-        
-        st.subheader("7. Channels with highest multi-account share")
+        st.subheader("3. Channels with highest multi-account share")
         multi_acc = df.groupby('acquisition_channel')['is_multi_account'].mean().reset_index(name='multi_acc_rate')
         st.plotly_chart(px.bar(multi_acc, x='acquisition_channel', y='multi_acc_rate', color='acquisition_channel'), use_container_width=True,key="key04")
+
+        st.subheader("5. Channels bringing early spenders who don't retain")
+        df['is_churned_spender'] = (df['spend_usd_f7d'] > 0) & (df['spend_usd_f7d'] > df['fs_amount']) & (~df['stayed_active_180d'])
+        churn_by_chan = df.groupby('acquisition_channel')['is_churned_spender'].mean().reset_index(name='churned_spenders%')
+        churn_by_chan['churned_spenders%'] *= 100
+        st.plotly_chart(px.bar(churn_by_chan, x='acquisition_channel', y='churned_spenders%', color='acquisition_channel', labels={'churned_spenders%': 'Churned Spenders (% of Total Users)'}), use_container_width=True,key="key01")
 
     with c2:
         st.subheader("2. Volume of new users by acquisition channel")
@@ -171,13 +170,8 @@ with tabs[0]:
         )
         st.plotly_chart(fig_percentile, use_container_width=True,key="key02")
 
-        st.subheader("6. Channels bringing early spenders who don't retain")
-        df['is_churned_spender'] = (df['spend_usd_f7d'] > 0) & (df['spend_usd_f7d'] > df['fs_amount']) & (~df['stayed_active_180d'])
-        churn_by_chan = df.groupby('acquisition_channel')['is_churned_spender'].mean().reset_index(name='churned_spenders%')
-        churn_by_chan['churned_spenders%'] *= 100
-        st.plotly_chart(px.bar(churn_by_chan, x='acquisition_channel', y='churned_spenders%', color='acquisition_channel', labels={'churned_spenders%': 'Churned Spenders (% of Total Users)'}), use_container_width=True,key="key01")
-
-        st.subheader("8. Acquisition channel mix across tiers")
+       
+        st.subheader("6. Acquisition channel mix across tiers")
         mix = df.groupby(['tier', 'acquisition_channel']).size().reset_index(name='count')
         fig_mix = px.bar(
             mix, 
